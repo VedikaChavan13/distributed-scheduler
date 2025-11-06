@@ -58,12 +58,13 @@ public class App {
             node.setState(org.example.model.TaskState.PENDING);
         }
 
-        System.out.println("\nDependency-Aware Parallel Execution Simulation:");
+        System.out.println("\nDependency-Aware Parallel Execution with Retry Simulation:");
         ExecutorService executor = Executors.newFixedThreadPool(3);
         Set<String> completed = Collections.synchronizedSet(new HashSet<>());
+        Set<String> failedPermanently = Collections.synchronizedSet(new HashSet<>());
         List<Future<?>> futures = new ArrayList<>();
 
-        while (completed.size() < sortedTasks.size()) {
+        while (completed.size() + failedPermanently.size() < sortedTasks.size()) {
             boolean madeProgress = false;
 
             for (TaskNode node : sortedTasks) {
@@ -78,35 +79,59 @@ public class App {
                     if (ready) {
                         node.setState(org.example.model.TaskState.RUNNING);
                         madeProgress = true;
-                        // Submit task for execution and add future for tracking completion
+
                         Future<?> future = executor.submit(() -> {
                             System.out.println("Task: " + node.getId() + " is RUNNING (thread " + Thread.currentThread().getName() + ")");
                             try { Thread.sleep(500); } catch (InterruptedException e) {}
-                            node.setState(org.example.model.TaskState.SUCCESS);
-                            completed.add(node.getId());
-                            System.out.println("Task: " + node.getId() + " completed SUCCESS\n");
+
+                            // Simulate random failure (30% chance) if retries are left
+                            if (Math.random() < 0.3 && node.getRetryCount() < node.getMaxRetries()) {
+                                node.setState(org.example.model.TaskState.FAILED);
+                                node.setRetryCount(node.getRetryCount() + 1);
+                                System.out.println("Task: " + node.getId() + " FAILED! Retry count: " + node.getRetryCount());
+                            } else if (node.getRetryCount() < node.getMaxRetries()) {
+                                node.setState(org.example.model.TaskState.SUCCESS);
+                                completed.add(node.getId());
+                                System.out.println("Task: " + node.getId() + " completed SUCCESS\n");
+                            } else {
+                                node.setState(org.example.model.TaskState.FAILED);
+                                failedPermanently.add(node.getId());
+                                System.out.println("Task: " + node.getId() + " permanently FAILED after max retries!");
+                            }
                         });
                         futures.add(future);
                     }
                 }
             }
+
             // Wait for this batch of tasks to finish before proceeding
             for (Future<?> f : futures) {
                 try { f.get(); } catch (Exception e) {}
             }
-            futures.clear(); // Clear finished tasks
-            // If no progress, break to avoid infinite loop
+            futures.clear();
+
+            // After each round, reset failed tasks with retries left to PENDING for rescheduling
+            for (TaskNode node : sortedTasks) {
+                if (node.getState() == org.example.model.TaskState.FAILED && node.getRetryCount() < node.getMaxRetries()) {
+                    node.setState(org.example.model.TaskState.PENDING);
+                }
+            }
+
             if (!madeProgress) break;
         }
 
         executor.shutdown();
-        try { executor.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException e) {}
+        try {
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {}
 
-        System.out.println("Final Workflow State after Dependency-Aware Parallel Execution:");
+        System.out.println("Final Workflow State after Dependency-Aware Parallel Execution with Retry:");
         for (TaskNode node : workflow.getTasks().values()) {
-            System.out.println("Task: " + node.getId() + " | State: " + node.getState());
+            System.out.println("Task: " + node.getId() + " | State: " + node.getState() + " | Retries: " + node.getRetryCount());
         }
 
+
+        
     }
 
 }
